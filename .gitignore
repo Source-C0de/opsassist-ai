@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# OpsAssist AI: generated artifacts (rebuilt by `python src/ingest.py run`)
+data/chunks.jsonl
+data/raw_manifest.jsonl
+data/feedback/
