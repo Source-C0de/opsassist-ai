@@ -220,4 +220,5 @@ __marimo__/
 # OpsAssist AI: generated artifacts (rebuilt by `python src/ingest.py run`)
 data/chunks.jsonl
 data/raw_manifest.jsonl
+data/bm25.pkl
 data/feedback/
