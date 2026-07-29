@@ -1,5 +1,26 @@
-streamlit>=1.32
-openai>=1.30
-qdrant-client>=1.12
-tiktoken>=0.7
-python-dotenv>=1.0
+# OpsAssist AI — pinned dependencies (LLM Zoomcamp capstone)
+#
+# Install with:
+#     pip install -r requriement.txt
+#
+# Versions are pinned so a peer reviewer can reproduce the environment exactly.
+
+# --- Core RAG stack ----------------------------------------------------------
+openai==1.51.0
+qdrant-client==1.12.0
+tiktoken==0.7.0
+python-dotenv==1.0.1
+
+# --- Streamlit UI + monitoring ----------------------------------------------
+streamlit==1.36.0
+streamlit-extras==0.4.3
+pandas==2.2.2
+altair==5.4.1
+
+# --- Cross-encoder reranker (CPU is fine for ms-marco-MiniLM) ---------------
+sentence-transformers==3.0.1
+torch==2.3.1
+
+# --- Test + eval helpers -----------------------------------------------------
+pytest==8.3.2
+pytest-mock==3.14.0
