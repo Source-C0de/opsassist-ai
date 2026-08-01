@@ -1,0 +1,48 @@
+# Cloud-optimised image for OpsAssist AI.
+#
+# Differences from the local `Dockerfile`:
+#   * listens on $PORT (the platform assigns it; defaults to 8501)
+#   * skips the local Qdrant container — wire QDRANT_URL to a managed cluster
+#     or to Fly Postgres + pgvector, Render's Qdrant add-on, etc.
+#   * runs Streamlit as the default user (no root in production)
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app/src \
+    PORT=8501 \
+    HOME=/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential curl tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 appuser
+
+COPY requriement.txt ./
+RUN pip install --upgrade pip \
+    && pip install -r requriement.txt
+
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser data/raw/ ./data/raw/
+COPY --chown=appuser:appuser data/data_sources.md ./data/data_sources.md
+COPY --chown=appuser:appuser .env.example ./.env.example
+
+# Make sure the data + feedback dirs exist and are writable.
+RUN mkdir -p /app/data/feedback /app/data/eval \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8501
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+
+# tini reaps zombies and forwards signals — recommended on every cloud.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+CMD ["sh", "-c", "streamlit run src/app.py --server.address=0.0.0.0 --server.port=${PORT} --server.headless=true --browser.gatherUsageStats=false"]

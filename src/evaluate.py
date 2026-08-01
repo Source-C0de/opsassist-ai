@@ -18,6 +18,7 @@ Usage
 -----
     python src/evaluate.py retrieval
     python src/evaluate.py llm
+    python src/evaluate.py prompts
     python src/evaluate.py all
 """
 
@@ -53,6 +54,15 @@ STRATEGIES: list[str] = [
     "hybrid_k20_rerank",
     "hybrid_k20_rerank_rewrite",
 ]
+
+# LLM prompt strategies — each is a name registered in src/prompts.py.
+PROMPT_STRATEGIES: list[str] = [
+    "concise",
+    "with_citations",
+    "chain_of_thought",
+    "no_citations",
+]
+LLM_PROMPT_REPORT = EVAL_DIR / "llm_prompt_report.json"
 
 
 # ---------------------------------------------------------------------------
@@ -388,13 +398,110 @@ def evaluate_llm(
 
 
 # ---------------------------------------------------------------------------
+# Multi-prompt comparison
+# ---------------------------------------------------------------------------
+def evaluate_llm_prompts(
+    items: list[EvalItem] | None = None,
+    prompts: Iterable[str] = PROMPT_STRATEGIES,
+    out_path: Path = LLM_PROMPT_REPORT,
+) -> dict:
+    """Run the eval set through every prompt style; grade with the judge.
+
+    Picks the winning prompt by the highest mean (relevance + faithfulness +
+    completeness)/3. The report is written to ``data/eval/llm_prompt_report.json``
+    and consumed by ``notebooks/03_llm_eval.ipynb``.
+    """
+    from rag import rag_pipeline
+
+    items = items or load_eval_set()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not items:
+        empty = {"items": 0, "per_prompt": {}, "winner": None}
+        out_path.write_text(json.dumps(empty, indent=2))
+        return empty
+
+    per_prompt: dict[str, dict[str, list[float] | list[dict]]] = {}
+    for prompt in prompts:
+        per_prompt[prompt] = {"relevance": [], "faithfulness": [], "completeness": [], "samples": []}
+
+    for item in items:
+        for prompt in prompts:
+            t0 = time.perf_counter()
+            try:
+                result = rag_pipeline(
+                    query=item.question,
+                    rewrite=False,
+                    rerank=False,
+                    prompt_name=prompt,
+                )
+                answer = result.get("answer", "")
+            except Exception as exc:
+                answer = ""
+                print(f"[warn] rag_pipeline failed for prompt={prompt} qid={item.qid}: {exc}")
+            latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+            score = judge_answer(item.question, item.reference_answer, answer)
+            per_prompt[prompt]["relevance"].append(float(score.get("relevance", 0) or 0))
+            per_prompt[prompt]["faithfulness"].append(float(score.get("faithfulness", 0) or 0))
+            per_prompt[prompt]["completeness"].append(float(score.get("completeness", 0) or 0))
+            per_prompt[prompt]["samples"].append(
+                {
+                    "qid": item.qid,
+                    "difficulty": item.difficulty,
+                    "judge": score,
+                    "answer_excerpt": answer[:240],
+                    "latency_ms": latency_ms,
+                }
+            )
+
+    summary: dict[str, dict[str, float]] = {}
+    for prompt, buckets in per_prompt.items():
+        rel = buckets["relevance"]
+        fai = buckets["faithfulness"]
+        comp = buckets["completeness"]
+        summary[prompt] = {
+            "avg_relevance": round(statistics.fmean(rel), 3) if rel else 0.0,
+            "avg_faithfulness": round(statistics.fmean(fai), 3) if fai else 0.0,
+            "avg_completeness": round(statistics.fmean(comp), 3) if comp else 0.0,
+            "avg_overall": (
+                round(
+                    statistics.fmean(
+                        [(r + f + c) / 3 for r, f, c in zip(rel, fai, comp)]
+                    ),
+                    3,
+                )
+                if rel
+                else 0.0
+            ),
+            "items": len(rel),
+        }
+
+    winner = (
+        max(summary, key=lambda p: summary[p]["avg_overall"]) if summary else None
+    )
+    report = {
+        "items": len(items),
+        "prompts_compared": list(prompts),
+        "per_prompt": summary,
+        "winner": winner,
+        "samples": {p: per_prompt[p]["samples"] for p in per_prompt},
+    }
+    out_path.write_text(json.dumps(report, indent=2))
+    print(f"Wrote multi-prompt report -> {out_path}")
+    print(json.dumps(summary, indent=2))
+    if winner:
+        print(f"Winner: {winner}")
+    return report
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OpsAssist evaluation harness.")
     parser.add_argument(
         "mode",
-        choices=("retrieval", "llm", "all"),
+        choices=("retrieval", "llm", "prompts", "all"),
         default="all",
         nargs="?",
         help="Which evaluation to run (default: all).",
@@ -411,6 +518,8 @@ def main(argv: list[str] | None = None) -> int:
         evaluate_retrieval(k=args.k)
     if args.mode in ("llm", "all"):
         evaluate_llm()
+    if args.mode in ("prompts", "all"):
+        evaluate_llm_prompts()
     return 0
 
 

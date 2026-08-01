@@ -107,6 +107,19 @@ Metrics are written to `data/eval/retrieval_report.json`. LLM-as-judge results
 are written to `data/eval/llm_judge_report.json`. The LLM evaluation requires
 `OPENAI_API_KEY`.
 
+### Multi-prompt LLM comparison
+
+```bash
+PYTHONPATH=src python src/evaluate.py prompts
+```
+
+Runs every entry in `src/prompts.py` (`concise`, `with_citations`,
+`chain_of_thought`, `no_citations`) over the same 44-question golden set,
+scores each answer with the LLM judge, and writes
+`data/eval/llm_prompt_report.json` (per-prompt averages + winner). The
+notebook `notebooks/03_llm_eval.ipynb` consumes both `llm_judge_report.json`
+and `llm_prompt_report.json` to render side-by-side bar charts.
+
 ## 7. Log explainer CLI
 
 ```bash

@@ -19,6 +19,7 @@ from typing import Any, Sequence
 
 from dotenv import load_dotenv
 
+from prompts import DEFAULT_PROMPT, build_messages, get_prompt
 from query_rewriter import rewrite_query
 from reranker import CrossEncoderReranker
 from retriever import HybridRetriever
@@ -27,14 +28,7 @@ load_dotenv()
 
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 ANSWER_MAX_TOKENS = int(os.getenv("ANSWER_MAX_TOKENS", "600"))
-
-SYSTEM_PROMPT = (
-    "You are OpsAssist, a concise ops/devops assistant. Answer the user's "
-    "question using ONLY the provided context passages. If the context does "
-    "not contain the answer, say so explicitly — do not invent. Cite the "
-    "passage numbers in square brackets, e.g. [1], [2]. Keep answers tight: "
-    "lead with the answer, then 1-3 sentences of detail."
-)
+ANSWER_PROMPT = os.getenv("ANSWER_PROMPT", DEFAULT_PROMPT)
 
 
 def _format_context(hits: Sequence[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
@@ -65,26 +59,14 @@ def _build_messages(
     query: str,
     context: str,
     history: Sequence[dict] | None = None,
+    prompt_name: str = ANSWER_PROMPT,
 ) -> list[dict]:
-    """Compose chat-completion messages with system + history + current turn."""
-    history_lines: list[str] = []
-    for turn in (history or [])[-6:]:
-        role = turn.get("role", "user")
-        content = (turn.get("content") or "").strip()
-        if content:
-            history_lines.append(f"{role}: {content}")
-    history_block = "\n".join(history_lines)
+    """Compose chat-completion messages with system + history + current turn.
 
-    user_prompt = (
-        f"Context passages:\n{context}\n\n"
-        + (f"Conversation so far:\n{history_block}\n\n" if history_block else "")
-        + f"Question: {query}\n\n"
-        "Answer with citations:"
-    )
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
+    Delegates to :mod:`prompts` so the production pipeline can be re-pointed
+    at any registered prompt style via the ``ANSWER_PROMPT`` env var.
+    """
+    return build_messages(query, context, prompt_name=prompt_name, history=history)
 
 
 def _llm_answer(messages: list[dict], model: str = ANSWER_MODEL) -> str:
@@ -115,10 +97,16 @@ def rag_pipeline(
     retrieve_k: int = 20,
     rewrite: bool = True,
     rerank: bool = True,
+    prompt_name: str = ANSWER_PROMPT,
     retriever: HybridRetriever | None = None,
     reranker: CrossEncoderReranker | None = None,
 ) -> dict[str, Any]:
-    """Run the full RAG flow and return answer + sources + timings."""
+    """Run the full RAG flow and return answer + sources + timings.
+
+    ``prompt_name`` selects one of the registered prompt styles in
+    :mod:`prompts` (``concise`` by default). The evaluator varies this to
+    compare styles.
+    """
     timings: dict[str, float] = {}
     retriever = retriever or HybridRetriever.from_disk()
     reranker = reranker or CrossEncoderReranker()
@@ -158,7 +146,7 @@ def rag_pipeline(
             "timings": timings,
         }
 
-    messages = _build_messages(query, context, history)
+    messages = _build_messages(query, context, history, prompt_name=prompt_name)
 
     # 5. LLM answer.
     t0 = time.perf_counter()
@@ -189,12 +177,20 @@ def main() -> int:
     import argparse
     import json as jsonlib
 
+    from prompts import available_prompts
+
     parser = argparse.ArgumentParser(description="OpsAssist RAG pipeline")
     parser.add_argument("--query", required=True)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--retrieve-k", type=int, default=20)
     parser.add_argument("--no-rewrite", action="store_true")
     parser.add_argument("--no-rerank", action="store_true")
+    parser.add_argument(
+        "--prompt",
+        choices=available_prompts(),
+        default=ANSWER_PROMPT,
+        help="Prompt style registered in src/prompts.py.",
+    )
     args = parser.parse_args()
 
     result = rag_pipeline(
@@ -203,6 +199,7 @@ def main() -> int:
         retrieve_k=args.retrieve_k,
         rewrite=not args.no_rewrite,
         rerank=not args.no_rerank,
+        prompt_name=args.prompt,
     )
     print(jsonlib.dumps(result, indent=2)[:4000])
     return 0

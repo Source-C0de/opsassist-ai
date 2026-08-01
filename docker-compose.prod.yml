@@ -1,0 +1,88 @@
+# Production override for `docker compose up`.
+# Bring it up with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences vs the local stack:
+#   * no bind-mounts of src/data/raw (read-only image only)
+#   * Qdrant + Elasticsearch persist into named volumes
+#   * Streamlit service exposes 8501 directly (no host network overrides)
+#   * uses restart: unless-stopped so it survives reboots
+#
+# If you want to point at a managed Qdrant/Elastic cluster instead, just
+# drop the local `qdrant` and `elasticsearch` services here and set
+# QDRANT_URL / ELASTIC_URL in the app service.
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=opsassist
+      - POSTGRES_USER=opsassist
+      - POSTGRES_PASSWORD_FILE=/run/secrets/pg_password
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    secrets:
+      - pg_password
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - ELASTIC_URL=http://elasticsearch:9200
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=opsassist
+      - POSTGRES_USER=opsassist
+      - POSTGRES_PASSWORD_FILE=/run/secrets/pg_password
+      - ANSWER_MODEL=gpt-4o-mini
+      - EMBED_MODEL=text-embedding-3-small
+      - EMBED_DIM=1536
+      - ANSWER_PROMPT=concise
+      - ENABLE_FEEDBACK=true
+    ports:
+      - "8501:8501"
+    secrets:
+      - pg_password
+
+volumes:
+  qdrant_data:
+  es_data:
+  pg_data:
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt

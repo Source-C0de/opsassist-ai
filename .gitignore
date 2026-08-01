@@ -156,6 +156,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# Local secrets dir used by docker-compose.prod.yml
+secrets/
 
 # Spyder project settings
 .spyderproject

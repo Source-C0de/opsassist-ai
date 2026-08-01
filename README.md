@@ -152,8 +152,32 @@ Screenshots live under `images/`.
 - ✅ Hybrid search (BM25 + dense via RRF)
 - ✅ Cross-encoder re-ranking
 - ✅ LLM-based query rewriting
+- ✅ **Multi-prompt LLM comparison** — see `src/prompts.py` and
+  `data/eval/llm_prompt_report.json` (regenerate with
+  `PYTHONPATH=src python src/evaluate.py prompts`)
 - ✅ Idempotent, scripted ingestion (`src/ingest.py`)
-- ✅ Pytest suite for retriever, reranker, and rag pipeline
+- ✅ Pytest suite for retriever, reranker, rag pipeline, and prompts
+
+## Cloud deployment
+
+Three ready-made paths, all driven from this repo:
+
+```bash
+# Fly.io (recommended — first deploy after `fly launch --no-deploy --copy-config`)
+fly secrets set OPENAI_API_KEY=sk-... QDRANT_URL=https://YOUR.qdrant.io QDRANT_API_KEY=...
+fly deploy
+
+# Render Blueprint (push to GitHub, then "New Blueprint" in the dashboard)
+
+# Self-hosted Docker (VPS / bare metal)
+echo mysecret > secrets/pg_password.txt
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+See `deploy/README.md` for the full walkthrough, cost notes, and rollback
+commands. The app is a single Streamlit process on port `8501`, talks to a
+remote Qdrant + (optionally) Postgres, and ships with `Dockerfile.cloud`
+referenced by both `fly.toml` and `render.yaml`.
 
 ## Limitations
 

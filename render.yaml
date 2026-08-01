@@ -1,0 +1,42 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Renders a Streamlit app with managed Postgres + Qdrant Cloud env vars.
+#
+# Apply:
+#   1. Push this repo to GitHub.
+#   2. In Render, choose "New + -> Blueprint" and point at this repo.
+#   3. Set OPENAI_API_KEY (and QDRANT_URL + QDRANT_API_KEY for Qdrant Cloud).
+#   4. Click "Apply". Render will build the Dockerfile.cloud image, expose
+#      port 8501 and assign opsassist-ai.onrender.com.
+
+services:
+  - type: web
+    name: opsassist-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile.cloud
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8501
+      - key: PYTHONPATH
+        value: /app/src
+      - key: QDRANT_URL
+        sync: false          # set after creating Qdrant Cloud cluster
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: ANSWER_MODEL
+        value: gpt-4o-mini
+      - key: EMBED_MODEL
+        value: text-embedding-3-small
+      - key: EMBED_DIM
+        value: 1536
+      - key: ANSWER_PROMPT
+        value: concise
+      - key: OPENAI_API_KEY
+        sync: false          # secret — set in Render dashboard
+      - key: ENABLE_FEEDBACK
+        value: "true"
+      - key: DISABLE_TELEMETRY
+        value: "true"

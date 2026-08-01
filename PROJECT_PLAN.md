@@ -305,20 +305,20 @@ Score yourself against the rubric:
 
 | Criterion                              | Target | Self-score |
 |----------------------------------------|--------|------------|
-| Problem description                    | 2      | ☐          |
-| Retrieval flow                         | 2      | ☐          |
-| Retrieval evaluation (multi-approach)  | 2      | ☐          |
-| LLM evaluation (multi-prompt)          | 2      | ☐          |
-| Interface (Streamlit UI)               | 2      | ☐          |
-| Ingestion pipeline (automated)         | 2      | ☐          |
-| Monitoring (feedback + ≥5 charts)      | 2      | ☐          |
-| Containerization (docker-compose)      | 2      | ☐          |
-| Reproducibility                        | 2      | ☐          |
-| Hybrid search                          | +1     | ☐          |
-| Re-ranking                             | +1     | ☐          |
-| Query rewriting                        | +1     | ☐          |
-| Cloud deployment                       | +2     | ☐          |
-| **Total possible**                     | **23** |            |
+| Problem description                    | 2      | ☑ (README) |
+| Retrieval flow                         | 2      | ☑ (`rag.py`) |
+| Retrieval evaluation (multi-approach)  | 2      | ☑ (4 strategies) |
+| LLM evaluation (multi-prompt)          | 2      | ☑ (`src/prompts.py` + `evaluate.py prompts`) |
+| Interface (Streamlit UI)               | 2      | ☑ (`src/app.py`) |
+| Ingestion pipeline (automated)         | 2      | ☑ (`src/ingest.py`) |
+| Monitoring (feedback + ≥5 charts)      | 2      | ☑ (6 charts) |
+| Containerization (docker-compose)      | 2      | ☑ (`docker-compose.yml`) |
+| Reproducibility                        | 2      | ☑ (`setup.md` + `Dockerfile`) |
+| Hybrid search                          | +1     | ☑ (`retriever.py`) |
+| Re-ranking                             | +1     | ☑ (`reranker.py`) |
+| Query rewriting                        | +1     | ☑ (`query_rewriter.py`) |
+| Cloud deployment                       | +2     | ☑ (`fly.toml` + `render.yaml` + `Dockerfile.cloud` + `deploy/README.md`) |
+| **Total possible**                     | **23** | **23** |
 
 ---
 

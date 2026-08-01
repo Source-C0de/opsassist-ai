@@ -1,0 +1,63 @@
+# Fly.io deployment manifest for OpsAssist AI.
+#
+# One-click deploy:
+#     fly launch --no-deploy --copy-config   # first time
+#     fly secrets set OPENAI_API_KEY=sk-...  # set secrets
+#     fly deploy                             # ship it
+#
+# Region pool below picks cheap, low-latency regions; change `primary_region`
+# to your preferred edge. Memory / CPU are sized for the cross-encoder
+# reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`) plus Streamlit.
+
+app = "opsassist-ai"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.cloud"
+
+[env]
+  PORT = "8501"
+  QDRANT_URL = "http://qdrant.internal:6333"
+  QDRANT_COLLECTION = "opsassist"
+  ANSWER_MODEL = "gpt-4o-mini"
+  EMBED_MODEL = "text-embedding-3-small"
+  EMBED_DIM = "1536"
+
+[[services]]
+  internal_port = 8501
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 50
+    soft_limit = 25
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2
+
+[deploy]
+  release_command = "python src/index.py"
+
+# Persistent volume for the Qdrant data directory.
+[[mounts]]
+  source = "qdrant_data"
+  destination = "/qdrant/storage"
+
+# Internal Qdrant service — only reachable inside the Fly network.
+[processes]
+  app = "streamlit run src/app.py --server.address=0.0.0.0 --server.port=8501"
