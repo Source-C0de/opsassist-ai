@@ -78,19 +78,28 @@ def _init_state() -> None:
 
 
 def _format_sources(sources: list[dict[str, Any]]) -> None:
+    """Render retrieved sources as a numbered list.
+
+    Note: this is always called from inside the caller's ``st.expander``
+    ("Sources") in ``main()``, so we must NOT use ``st.expander`` here —
+    Streamlit rejects nested expanders with a ``StreamlitAPIException``.
+    """
     if not sources:
         st.info("No source passages matched this query.")
         return
     for idx, src in enumerate(sources, start=1):
-        label = (
-            f"[{idx}] · score {src.get('rerank_score') or src.get('score') or 0:.3f} "
-            f"· {src.get('source')} · chunk {src.get('chunk_index')}"
+        score = src.get("rerank_score") or src.get("score") or 0
+        source = src.get("source") or "unknown"
+        chunk_index = src.get("chunk_index")
+        rank = src.get("rank")
+        header = (
+            f"**[{idx}] · score {float(score):.3f} · "
+            f"`{source}` · chunk {chunk_index}**"
         )
-        with st.expander(label, expanded=idx == 1):
-            st.write((src.get("text") or "").strip())
-            st.caption(
-                f"Source: `{src.get('source')}` · rank {src.get('rank')}"
-            )
+        st.markdown(header)
+        st.write((src.get("text") or "").strip())
+        if rank is not None:
+            st.caption(f"rank {rank}")
 
 
 EXAMPLE_QUESTIONS = [
@@ -287,4 +296,6 @@ def cli(argv: list[str] | None = None) -> int:  # noqa: ARG001
 
 
 if __name__ == "__main__":
-    sys.exit(cli())
+    # Streamlit re-runs this module and ``__name__`` is ``"__main__"`` for
+    # every page render, so we must call ``main()`` here, not the CLI shim.
+    main()
