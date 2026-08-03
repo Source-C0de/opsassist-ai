@@ -96,12 +96,26 @@ class _RateLimitStubError(Exception):
     """Stand-in for openai.RateLimitError used by tests."""
 
 
+class _PermanentStubError(Exception):
+    """Stand-in for permanent OpenAI errors (401/403/400) used by tests.
+
+    Carries a ``body`` dict so the format-aware branch of
+    ``_friendly_embed_error`` can be exercised.
+    """
+
+    def __init__(self, message: str, body: dict | None = None) -> None:
+        super().__init__(message)
+        self.body = body or {"error": {"code": "model_not_found", "message": message}}
+
+
 class _FakeClient:
     """Minimal OpenAI client stub driven by a list of scripted outcomes.
 
-    Each outcome is either the string ``"raise"`` (raise a
-    ``_RateLimitStubError``) or a list of embedding vectors. The retry
-    helper will see them one at a time and either succeed or move on.
+    Each outcome is either:
+    - the string ``"raise"`` (raise a transient ``_RateLimitStubError``);
+    - the string ``"raise_permanent"`` (raise a ``_PermanentStubError``,
+      i.e. 401/403/400 — must NOT be retried);
+    - a list of embedding vectors (success).
     """
 
     def __init__(self, script):
@@ -118,6 +132,19 @@ class _FakeClient:
                 outer.call_count += 1
                 if outcome == "raise":
                     raise _RateLimitStubError(f"429 attempt {outer.call_count}")
+                if outcome == "raise_permanent":
+                    raise _PermanentStubError(
+                        f"Project proj_x does not have access to model {model}",
+                        body={
+                            "error": {
+                                "code": "model_not_found",
+                                "message": (
+                                    f"Project proj_x does not have access to "
+                                    f"model {model}"
+                                ),
+                            }
+                        },
+                    )
                 return _FakeResponse(outcome)
 
         # Bind the inner class so ``client.embeddings.create`` works.
@@ -133,9 +160,14 @@ def _patch_openai_exceptions(monkeypatch):
     import types
 
     fake_openai = types.ModuleType("openai")
+    # Transient errors (retryable).
     fake_openai.RateLimitError = _RateLimitStubError
     fake_openai.APITimeoutError = _RateLimitStubError
     fake_openai.APIError = _RateLimitStubError
+    # Permanent errors (NOT retryable; raised immediately).
+    fake_openai.AuthenticationError = _PermanentStubError
+    fake_openai.BadRequestError = _PermanentStubError
+    fake_openai.PermissionDeniedError = _PermanentStubError
     fake_openai.OpenAI = lambda *a, **kw: None  # tests override this
     monkeypatch.setitem(sys.modules, "openai", fake_openai)
 
@@ -155,11 +187,14 @@ def test_retry_succeeds_after_two_429s(_patch_openai_exceptions, no_sleep) -> No
 
 
 def test_retry_gives_up_after_max_retries(_patch_openai_exceptions, no_sleep) -> None:
-    """If all attempts raise, the last exception should propagate."""
+    """If all attempts raise, the helper wraps the last error in a friendly
+    ``RuntimeError`` rather than the raw SDK exception."""
     client = _FakeClient(["raise"] * (ingest_core.EMBED_MAX_RETRIES + 5))
-    with pytest.raises(_RateLimitStubError):
+    with pytest.raises(RuntimeError) as excinfo:
         _embed_batch_with_retry(client, "text-embedding-3-small", ["hi"])
     assert client.call_count == ingest_core.EMBED_MAX_RETRIES
+    # The original cause is preserved on the chain.
+    assert isinstance(excinfo.value.__cause__, _RateLimitStubError)
 
 
 def test_retry_no_retry_on_immediate_success(_patch_openai_exceptions, no_sleep) -> None:
@@ -177,6 +212,60 @@ def test_retry_inputs_pass_through(_patch_openai_exceptions, no_sleep) -> None:
         "model": "text-embedding-3-small",
         "input": ["a", "b"],
     }
+
+
+def test_retry_does_not_retry_403_model_not_found(
+    _patch_openai_exceptions, no_sleep
+) -> None:
+    """A 403 ``model_not_found`` is permanent — retrying wastes time. The
+    helper should raise a ``RuntimeError`` after exactly one call, with a
+    message that names the model and points to the OpenAI dashboard."""
+    client = _FakeClient(["raise_permanent", "raise_permanent", "raise_permanent"])
+    with pytest.raises(RuntimeError) as excinfo:
+        _embed_batch_with_retry(client, "text-embedding-3-small", ["hi"])
+    assert client.call_count == 1
+    msg = str(excinfo.value)
+    assert "text-embedding-3-small" in msg
+    assert "EMBED_MODEL" in msg  # tells the user how to fix it
+
+
+def test_retry_does_not_retry_401_authentication(
+    _patch_openai_exceptions, no_sleep
+) -> None:
+    """401 bad API key is also permanent — same one-shot rule."""
+    client = _FakeClient(["raise_permanent"])
+    with pytest.raises(RuntimeError):
+        _embed_batch_with_retry(client, "text-embedding-3-small", ["hi"])
+    assert client.call_count == 1
+
+
+# --- validate_embed_config --------------------------------------------------
+def test_validate_embed_config_passes_for_known_model() -> None:
+    ingest_core.validate_embed_config(
+        model="text-embedding-3-small", dim=1536
+    )  # no exception
+
+
+def test_validate_embed_config_catches_dim_mismatch() -> None:
+    with pytest.raises(RuntimeError) as excinfo:
+        ingest_core.validate_embed_config(
+            model="text-embedding-3-small", dim=3072
+        )
+    msg = str(excinfo.value)
+    assert "EMBED_DIM" in msg
+    assert "1536" in msg
+
+
+def test_validate_embed_config_skips_unknown_model() -> None:
+    # Unknown models are allowed; we can't validate them.
+    ingest_core.validate_embed_config(model="some-future-model", dim=4096)
+
+
+def test_known_embed_dim_returns_canonical_values() -> None:
+    assert ingest_core.known_embed_dim("text-embedding-3-small") == 1536
+    assert ingest_core.known_embed_dim("text-embedding-3-large") == 3072
+    assert ingest_core.known_embed_dim("text-embedding-ada-002") == 1536
+    assert ingest_core.known_embed_dim("nope") is None
 
 
 # --- embed_texts integration (no network) ----------------------------------

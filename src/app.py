@@ -39,6 +39,8 @@ from ingest_core import (  # noqa: E402
     collection_count,
     ensure_collection,
     get_qdrant_client,
+    known_embed_dim,
+    validate_embed_config,
 )
 from rag import rag_pipeline  # noqa: E402
 from tools.log_explainer import explain_log  # noqa: E402
@@ -119,6 +121,12 @@ def _sidebar() -> None:
             f"Collection: `{QDRANT_COLLECTION}`\n\n"
             f"Embed model: `{EMBED_MODEL}`"
         )
+        # Surface EMBED_MODEL / EMBED_DIM mismatches at startup so users
+        # don't get a confusing 400 from Qdrant (or wrong-dim vectors) later.
+        try:
+            validate_embed_config()
+        except RuntimeError as exc:
+            st.error(f"Embedding config: {exc}")
         try:
             client = get_qdrant_client()
             ensure_collection(client)

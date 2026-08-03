@@ -42,12 +42,51 @@ EMBED_TOKEN_BUDGET = int(os.getenv("EMBED_TOKEN_BUDGET", "30000"))
 EMBED_MAX_RETRIES = int(os.getenv("EMBED_MAX_RETRIES", "5"))
 EMBED_RETRY_BASE_SECONDS = float(os.getenv("EMBED_RETRY_BASE_SECONDS", "1.0"))
 
+# Known embedding model -> output dimension. Used to fail fast (with a clear
+# message) when an ``EMBED_DIM`` override is incompatible with the chosen
+# ``EMBED_MODEL`` — otherwise the first upload would silently 400 against
+# Qdrant or, worse, embed with the wrong dimensionality.
+KNOWN_EMBED_DIMS: dict[str, int] = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
+
+def known_embed_dim(model: str) -> int | None:
+    """Return the canonical output dimension for ``model``, or ``None`` if
+    the model is not in our registry. Unknown models are still allowed — we
+    just can't validate them."""
+    return KNOWN_EMBED_DIMS.get(model)
+
 
 def require_openai_key() -> None:
     """Raise if no OpenAI key is configured; the embedding step cannot proceed."""
     if not OPENAI_API_KEY:
         raise RuntimeError(
             "OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in."
+        )
+
+
+def validate_embed_config(model: str = EMBED_MODEL, dim: int = EMBED_DIM) -> None:
+    """Fail fast when ``EMBED_MODEL`` / ``EMBED_DIM`` are inconsistent.
+
+    A mismatch would otherwise silently corrupt the Qdrant collection's
+    vector size — the first upload either crashes with a Qdrant 400 or, if
+    Qdrant auto-creates with the wrong dim, all future similarity searches
+    return garbage. We bail out at startup with a fixable hint instead.
+    """
+    known = known_embed_dim(model)
+    if known is None:
+        # Unknown model — we trust the user, but make sure the SDK will be
+        # able to reach it. The actual API call will surface the real error.
+        return
+    if known != dim:
+        raise RuntimeError(
+            f"EMBED_MODEL='{model}' produces {known}-dim vectors but "
+            f"EMBED_DIM={dim}. Set EMBED_DIM={known} (or unset it so it "
+            f"defaults to the model's native dimension), or pick a model "
+            f"whose dimension matches EMBED_DIM."
         )
 
 
@@ -170,17 +209,64 @@ def _plan_token_batches(
     return batches
 
 
+def _friendly_embed_error(exc: Exception, model: str) -> RuntimeError:
+    """Turn a low-level OpenAI SDK error into a human-actionable message.
+
+    In particular, the 403 ``model_not_found`` error from a project-scoped
+    key (``sk-proj-…``) is *not* transient — retrying won't help and just
+    burns time. Surface it directly with a hint.
+    """
+    name = type(exc).__name__
+    body = getattr(exc, "body", None)
+    code = None
+    message = None
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else None
+        if err:
+            code = err.get("code")
+            message = err.get("message")
+
+    if code == "model_not_found" or name in {"PermissionDeniedError"}:
+        return RuntimeError(
+            f"OpenAI project does not have access to embedding model "
+            f"'{model}'. Enable it for your project at "
+            f"https://platform.openai.com/settings/organization/projects "
+            f"or set EMBED_MODEL to a model your project allows "
+            f"(e.g. text-embedding-3-small requires project-level model "
+            f"access). Original error: {message or exc}"
+        )
+    return RuntimeError(f"Embedding request failed: {message or exc}")
+
+
 def _embed_batch_with_retry(client, model: str, batch: list[str]) -> list[list[float]]:
-    """Call ``embeddings.create`` for one batch, retrying on 429 / transient
-    errors with exponential backoff."""
-    from openai import APIError, APITimeoutError, RateLimitError
+    """Call ``embeddings.create`` for one batch.
+
+    Retries transient errors (rate limits, timeouts, 5xx) with exponential
+    backoff. Permanent errors (401 auth, 403 model-not-found, 400 invalid
+    request) are raised immediately as a ``RuntimeError`` with a clear
+    message — retrying them just wastes time.
+    """
+    from openai import (
+        APIError,
+        APITimeoutError,
+        AuthenticationError,
+        BadRequestError,
+        PermissionDeniedError,
+        RateLimitError,
+    )
+
+    transient = (RateLimitError, APITimeoutError, APIError)
+    permanent = (AuthenticationError, BadRequestError, PermissionDeniedError)
 
     last_exc: Exception | None = None
     for attempt in range(EMBED_MAX_RETRIES):
         try:
             response = client.embeddings.create(model=model, input=batch)
             return [item.embedding for item in response.data]
-        except (RateLimitError, APITimeoutError, APIError) as exc:
+        except permanent as exc:
+            # 401 / 403 / 400 — retrying won't change the outcome.
+            raise _friendly_embed_error(exc, model) from exc
+        except transient as exc:
             last_exc = exc
             # If the SDK gave us a Retry-After hint, honour it; otherwise
             # exponential backoff: 1s, 2s, 4s, 8s, 16s (capped).
@@ -195,7 +281,7 @@ def _embed_batch_with_retry(client, model: str, batch: list[str]) -> list[list[f
             time.sleep(wait)
     # All retries exhausted.
     assert last_exc is not None
-    raise last_exc
+    raise _friendly_embed_error(last_exc, model) from last_exc
 
 
 def embed_texts(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
@@ -204,13 +290,15 @@ def embed_texts(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]
     Batches are sized to stay within ``EMBED_TOKEN_BUDGET`` tokens (per
     request) and ``EMBED_BATCH_SIZE`` items, so we never blow past the
     organisation's TPM limit. Transient 429/5xx errors are retried with
-    exponential backoff up to ``EMBED_MAX_RETRIES`` times.
+    exponential backoff up to ``EMBED_MAX_RETRIES`` times. Permanent
+    errors (401/403/400) are raised immediately with a clear message.
     """
     if not texts:
         return []
     from openai import OpenAI  # imported lazily so collect/clean stages don't need it
 
     require_openai_key()
+    validate_embed_config(model=model)
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     indices = _plan_token_batches(texts)
