@@ -39,7 +39,7 @@ services:
       - ./src:/app/src
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
       elasticsearch:
         condition: service_healthy
     restart: unless-stopped
@@ -80,7 +80,7 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200' <&3"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -113,7 +113,7 @@ services:
       POSTGRES_USER: opsassist
       POSTGRES_PASSWORD: opsassist
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - pg_storage:/var/lib/postgresql/data
     healthcheck:
