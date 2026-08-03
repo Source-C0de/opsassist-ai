@@ -224,3 +224,7 @@ data/chunks.jsonl
 data/raw_manifest.jsonl
 data/bm25.pkl
 data/feedback/
+
+# Puku CLI local state — never commit (user-specific, regeneratable)
+.puku/
+.puku-cli/
