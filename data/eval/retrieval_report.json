@@ -1,0 +1,27 @@
+{
+  "k": 5,
+  "items": 44,
+  "results_per_strategy": {
+    "vector_only_k5": {
+      "hit_rate_at_5": 0.5,
+      "mrr": 0.3447,
+      "ndcg_at_5": 0.2237
+    },
+    "vector_only_k20_rerank": {
+      "hit_rate_at_5": 0.5,
+      "mrr": 0.3447,
+      "ndcg_at_5": 0.2237
+    },
+    "hybrid_k20_rerank": {
+      "hit_rate_at_5": 0.6136,
+      "mrr": 0.4333,
+      "ndcg_at_5": 0.3224
+    },
+    "hybrid_k20_rerank_rewrite": {
+      "hit_rate_at_5": 0.6136,
+      "mrr": 0.4318,
+      "ndcg_at_5": 0.3087
+    }
+  },
+  "winner": "hybrid_k20_rerank"
+}
